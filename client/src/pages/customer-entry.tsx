@@ -125,10 +125,8 @@ export default function CustomerEntry() {
         form.setValue("addressLine1", result.standardizedAddress.streetAddress);
         form.setValue("city", result.standardizedAddress.city);
         form.setValue("state", result.standardizedAddress.state);
-        form.setValue("zip", result.standardizedAddress.ZIPPlus4 
-          ? `${result.standardizedAddress.ZIPCode}-${result.standardizedAddress.ZIPPlus4}`
-          : result.standardizedAddress.ZIPCode
-        );
+        // Use ZIPPlus4 if available (already formatted), otherwise use ZIPCode
+        form.setValue("zip", result.standardizedAddress.ZIPPlus4 || result.standardizedAddress.ZIPCode);
         toast({
           title: "Address Validated",
           description: "Address is valid and has been standardized.",

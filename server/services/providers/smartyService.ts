@@ -51,18 +51,19 @@ interface SmartyStreetResponse {
     ews_match?: boolean;
   };
   analysis: {
-    dpv_match_y: boolean;
-    dpv_match_n: boolean;
-    dpv_match_s: boolean;
-    dpv_match_d: boolean;
-    dpv_vacancy: string;
-    dpv_cmra: string;
-    dpv_footnotes: string;
-    ews_match: boolean;
-    footnotes: string;
-    lacslink_code: string;
-    lacslink_indicator: string;
-    suitelink_match: boolean;
+    dpv_match_y?: boolean;
+    dpv_match_n?: boolean;
+    dpv_match_s?: boolean;
+    dpv_match_d?: boolean;
+    dpv_match_code?: string; // Could be "Y", "N", "S", "D"
+    dpv_vacancy?: string;
+    dpv_cmra?: string;
+    dpv_footnotes?: string;
+    ews_match?: boolean;
+    footnotes?: string;
+    lacslink_code?: string;
+    lacslink_indicator?: string;
+    suitelink_match?: boolean;
   };
 }
 
@@ -114,6 +115,9 @@ export class SmartyService implements IAddressValidator {
       
       const latencyMs = Date.now() - startTime;
       
+      // Log response size for debugging (avoid logging PII)
+      console.log('Smarty API response received, candidate count:', result?.length || 0);
+      
       if (!result || result.length === 0) {
         return {
           isValid: false,
@@ -125,6 +129,7 @@ export class SmartyService implements IAddressValidator {
       }
 
       const candidate = result[0];
+      // Process candidate (logging removed to prevent PII exposure)
       return this.mapResponse(candidate, latencyMs);
       
     } catch (error) {
@@ -215,27 +220,39 @@ export class SmartyService implements IAddressValidator {
   private mapResponse(candidate: SmartyStreetResponse, latencyMs: number): NormalizedResult {
     const { components, analysis } = candidate;
     
+    // Add defensive checks for required fields
+    if (!components || !analysis) {
+      console.error('Smarty response missing required components or analysis:', candidate);
+      return {
+        isValid: false,
+        errors: ['Invalid response from address validation service'],
+        provider: AddressProvider.SMARTY,
+        latencyMs,
+      };
+    }
+    
     // Smarty's DPV (Delivery Point Validation) determines validity
-    const isValid = analysis.dpv_match_y === true;
+    // Check both dpv_match_y boolean and dpv_match_code string formats
+    const isValid = analysis.dpv_match_y === true || analysis.dpv_match_code === 'Y';
     const isVacant = analysis.dpv_vacancy === 'Y';
     
-    // Build standardized address
+    // Build standardized address with defensive checks
     const standardizedAddress = {
-      streetAddress: candidate.delivery_line_1,
+      streetAddress: candidate.delivery_line_1 || '',
       secondaryAddress: candidate.delivery_line_2,
-      city: components.city_name,
-      state: components.state_abbreviation,
-      ZIPCode: components.zipcode,
+      city: components.city_name || '',
+      state: components.state_abbreviation || '',
+      ZIPCode: components.zipcode || '',
       ZIPPlus4: components.plus4_code ? `${components.zipcode}-${components.plus4_code}` : components.zipcode,
     };
 
     // Generate suggestions based on analysis
     const suggestions: string[] = [];
     
-    if (analysis.footnotes.includes('A')) {
+    if (analysis.footnotes?.includes('A')) {
       suggestions.push('Address matched at the ZIP+4 level');
     }
-    if (analysis.footnotes.includes('B')) {
+    if (analysis.footnotes?.includes('B')) {
       suggestions.push('Address validated to building/unit level');
     }
     if (analysis.suitelink_match) {
@@ -252,20 +269,20 @@ export class SmartyService implements IAddressValidator {
       errors.push('This address appears to be vacant.');
     }
     
-    if (analysis.dpv_footnotes.includes('CC')) {
+    if (analysis.dpv_footnotes?.includes('CC')) {
       errors.push('Invalid city/state/ZIP combination.');
     }
     
-    if (analysis.dpv_footnotes.includes('N1')) {
+    if (analysis.dpv_footnotes?.includes('N1')) {
       errors.push('Primary number is invalid.');
     }
 
     // Calculate confidence score
     let confidence = 0;
-    if (analysis.dpv_match_y) confidence += 60;
+    if (analysis.dpv_match_y || analysis.dpv_match_code === 'Y') confidence += 60;
     if (analysis.suitelink_match) confidence += 20;
     if (components.plus4_code) confidence += 10;
-    if (analysis.footnotes.includes('A')) confidence += 10;
+    if (analysis.footnotes?.includes('A')) confidence += 10;
 
     return {
       isValid: isValid && !isVacant,

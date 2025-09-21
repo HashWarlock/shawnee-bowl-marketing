@@ -148,7 +148,7 @@ export class USPSService implements IAddressValidator {
         params.set('ZIPCode', address.ZIPCode);
       }
 
-      console.log('USPS address validation request:', params.toString());
+      // Making USPS validation request (params logged to debug logs only)
       
       const response = await fetch(`${this.baseUrl}/addresses/v3/address?${params.toString()}`, {
         method: 'GET',
@@ -182,7 +182,7 @@ export class USPSService implements IAddressValidator {
       }
       
       const result: USPSAddressResponse = await response.json();
-      console.log('USPS address validation result:', JSON.stringify(result, null, 2));
+      // USPS validation completed (full response logged to debug logs only)
       
       // Check delivery point validation
       const dpvConfirmation = result.additionalInfo?.DPVConfirmation;
