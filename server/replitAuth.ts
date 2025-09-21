@@ -155,3 +155,20 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     return;
   }
 };
+
+// Role-based middleware to check if user is admin
+export const isAdmin: RequestHandler = async (req, res, next) => {
+  try {
+    const userId = (req.user as any).claims.sub;
+    const user = await storage.getUser(userId);
+    
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    
+    return next();
+  } catch (error) {
+    console.error("Error checking admin role:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, isAuthenticated, isAdmin } from "./replitAuth";
 import { insertCustomerSchema } from "@shared/schema";
 import { z } from "zod";
 import { PDFGenerator } from "./services/pdfGenerator";
@@ -90,7 +90,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Customer CRUD routes
-  app.post('/api/customers', isAuthenticated, async (req, res) => {
+  app.post('/api/customers', isAuthenticated, isAdmin, async (req, res) => {
     try {
       const validatedData = insertCustomerSchema.parse(req.body);
       const customer = await storage.createCustomer(validatedData);
@@ -105,7 +105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/customers', isAuthenticated, async (req, res) => {
+  app.get('/api/customers', isAuthenticated, isAdmin, async (req, res) => {
     try {
       const { search, consentMailing, state, page = '1', perPage = '25' } = req.query;
       
@@ -125,7 +125,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/customers/:id', isAuthenticated, async (req, res) => {
+  app.get('/api/customers/:id', isAuthenticated, isAdmin, async (req, res) => {
     try {
       const customer = await storage.getCustomer(req.params.id);
       if (!customer) {
@@ -138,7 +138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/customers/:id', isAuthenticated, async (req, res) => {
+  app.put('/api/customers/:id', isAuthenticated, isAdmin, async (req, res) => {
     try {
       const validatedData = insertCustomerSchema.partial().parse(req.body);
       const customer = await storage.updateCustomer(req.params.id, validatedData);
@@ -153,7 +153,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete('/api/customers/:id', isAuthenticated, async (req, res) => {
+  app.delete('/api/customers/:id', isAuthenticated, isAdmin, async (req, res) => {
     try {
       await storage.deleteCustomer(req.params.id);
       res.json({ message: "Customer deleted successfully" });
@@ -164,7 +164,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Export routes
-  app.post('/api/exports/labels', isAuthenticated, async (req: any, res) => {
+  app.post('/api/exports/labels', isAuthenticated, isAdmin, async (req: any, res) => {
     try {
       const schema = z.object({
         customerIds: z.array(z.string()),
@@ -227,7 +227,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/exports/calllist', isAuthenticated, async (req: any, res) => {
+  app.post('/api/exports/calllist', isAuthenticated, isAdmin, async (req: any, res) => {
     try {
       const schema = z.object({
         customerIds: z.array(z.string()),
@@ -299,7 +299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/exports/recent', isAuthenticated, async (req: any, res) => {
+  app.get('/api/exports/recent', isAuthenticated, isAdmin, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const jobs = await storage.getRecentExportJobs(userId);
