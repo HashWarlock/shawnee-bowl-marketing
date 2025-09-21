@@ -6,7 +6,8 @@ import { insertCustomerSchema } from "@shared/schema";
 import { z } from "zod";
 import { PDFGenerator } from "./services/pdfGenerator";
 import { CSVExporter } from "./services/csvExporter";
-import { uspsService } from "./services/uspsService";
+import { addressOrchestrator } from "./services/addressOrchestrator";
+import { addressValidationInputSchema } from "@shared/schema";
 import path from 'path';
 import express from 'express';
 
@@ -34,19 +35,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Address validation route
+  // Address validation route with multi-provider support
   app.post('/api/validate-address', isAuthenticated, async (req, res) => {
     try {
-      const addressSchema = z.object({
-        streetAddress: z.string().min(1, "Street address is required"),
-        city: z.string().optional(),
-        state: z.string().length(2, "State must be a 2-character code"),
-        ZIPCode: z.string().optional(),
-        secondaryAddress: z.string().optional(),
-      });
-
-      const validatedData = addressSchema.parse(req.body);
-      const result = await uspsService.validateAddress(validatedData);
+      const validatedData = addressValidationInputSchema.parse(req.body);
+      
+      // Check for provider preference or mode override
+      const provider = req.query.provider as string;
+      const mode = req.query.mode as 'waterfall' | 'hedged';
+      
+      const options = {
+        preferredProvider: provider as any,
+        mode,
+      };
+      
+      const result = await addressOrchestrator.validateAddress(validatedData, options);
       
       res.json(result);
     } catch (error) {
@@ -54,14 +57,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof z.ZodError) {
         res.status(400).json({ 
           isValid: false,
-          errors: error.errors.map(e => `${e.path.join('.')}: ${e.message}`)
+          errors: error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
+          provider: 'unknown',
+          latencyMs: 0,
         });
       } else {
         res.status(500).json({ 
           isValid: false,
-          errors: ["Address validation failed. Please try again."]
+          errors: ["Address validation failed. Please try again."],
+          provider: 'unknown',
+          latencyMs: 0,
         });
       }
+    }
+  });
+
+  // Provider health check endpoint
+  app.get('/api/validate-address/health', isAuthenticated, async (req, res) => {
+    try {
+      const health = addressOrchestrator.getProviderHealth();
+      const cacheStats = addressOrchestrator.getCacheStats();
+      
+      res.json({
+        providers: health,
+        cache: cacheStats,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Error getting provider health:", error);
+      res.status(500).json({ message: "Failed to get provider health" });
     }
   });
 

@@ -1,3 +1,5 @@
+import { AddressProvider, AddressValidationInput, IAddressValidator, NormalizedResult } from '@shared/schema';
+
 interface USPSAuthResponse {
   access_token: string;
   token_type: string;
@@ -66,21 +68,21 @@ interface USPSErrorResponse {
   }>;
 }
 
-export class USPSService {
+export class USPSService implements IAddressValidator {
   private static instance: USPSService;
   private accessToken: string | null = null;
   private tokenExpiry: Date | null = null;
   private readonly clientId: string;
   private readonly clientSecret: string;
   private readonly baseUrl = 'https://api.usps.com';
-  private readonly isEnabled: boolean;
+  private readonly serviceEnabled: boolean;
 
   private constructor() {
     this.clientId = process.env.USPS_CLIENT_ID || '';
     this.clientSecret = process.env.USPS_CLIENT_SECRET || '';
-    this.isEnabled = !!(this.clientId && this.clientSecret);
+    this.serviceEnabled = !!(this.clientId && this.clientSecret);
     
-    if (!this.isEnabled) {
+    if (!this.serviceEnabled) {
       console.warn('USPS API credentials not found in environment variables. Address validation will be unavailable.');
     }
   }
@@ -92,10 +94,165 @@ export class USPSService {
     return USPSService.instance;
   }
 
+  isEnabled(): boolean {
+    return this.serviceEnabled;
+  }
+
+  getProviderName(): AddressProvider {
+    return AddressProvider.USPS;
+  }
+
+  async validate(input: AddressValidationInput): Promise<NormalizedResult> {
+    const startTime = Date.now();
+    
+    // Convert from shared interface to USPS format
+    const address: USPSAddressRequest = {
+      streetAddress: input.streetAddress,
+      secondaryAddress: input.secondaryAddress,
+      city: input.city,
+      state: input.state,
+      ZIPCode: input.ZIPCode,
+    };
+
+    return this.validateAddress(address, startTime);
+  }
+
+  private async validateAddress(address: USPSAddressRequest, startTime: number): Promise<NormalizedResult> {
+    // Check if service is enabled
+    if (!this.serviceEnabled) {
+      return {
+        isValid: false,
+        serviceUnavailable: true,
+        errors: ['USPS address validation is not configured. You may save the customer with a warning.'],
+        provider: AddressProvider.USPS,
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
+    try {
+      const token = await this.getAccessToken();
+      
+      // Build query parameters
+      const params = new URLSearchParams({
+        streetAddress: address.streetAddress,
+        state: address.state,
+      });
+      
+      if (address.secondaryAddress) {
+        params.set('secondaryAddress', address.secondaryAddress);
+      }
+      if (address.city) {
+        params.set('city', address.city);
+      }
+      if (address.ZIPCode) {
+        params.set('ZIPCode', address.ZIPCode);
+      }
+
+      console.log('USPS address validation request:', params.toString());
+      
+      const response = await fetch(`${this.baseUrl}/addresses/v3/address?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      console.log('USPS address validation response status:', response.status);
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            isValid: false,
+            errors: ['Address not found. Please check the address and try again.'],
+            provider: AddressProvider.USPS,
+            latencyMs: Date.now() - startTime,
+          };
+        }
+        
+        const errorText = await response.text();
+        console.error('USPS address validation error response:', errorText);
+        
+        return {
+          isValid: false,
+          errors: ['Address validation failed. Please check the address and try again.'],
+          provider: AddressProvider.USPS,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+      
+      const result: USPSAddressResponse = await response.json();
+      console.log('USPS address validation result:', JSON.stringify(result, null, 2));
+      
+      // Check delivery point validation
+      const dpvConfirmation = result.additionalInfo?.DPVConfirmation;
+      const isVacant = result.additionalInfo?.vacant === 'Y';
+      const isValid = dpvConfirmation === 'Y' && !isVacant;
+      
+      // Build standardized address
+      const standardizedAddr = result.address;
+      
+      // Extract suggestions from corrections and matches
+      const suggestions: string[] = [];
+      
+      if (result.corrections?.length) {
+        result.corrections.forEach(correction => {
+          suggestions.push(`Correction: ${correction.text}`);
+        });
+      }
+      
+      if (result.matches?.length) {
+        result.matches.forEach(match => {
+          suggestions.push(`Match: ${match.text}`);
+        });
+      }
+      
+      if (result.warnings?.length) {
+        suggestions.push(...result.warnings);
+      }
+
+      const latencyMs = Date.now() - startTime;
+      
+      return {
+        isValid,
+        standardizedAddress: {
+          streetAddress: standardizedAddr.streetAddress,
+          city: standardizedAddr.city,
+          state: standardizedAddr.state,
+          ZIPCode: standardizedAddr.ZIPCode,
+          ZIPPlus4: standardizedAddr.ZIPPlus4,
+          secondaryAddress: standardizedAddr.secondaryAddress,
+        },
+        suggestions: suggestions.length > 0 ? suggestions : undefined,
+        errors: isVacant ? ['This address appears to be vacant.'] : undefined,
+        provider: AddressProvider.USPS,
+        latencyMs,
+        confidence: isVacant ? 60 : 80, // Lower confidence for vacant addresses
+      };
+
+    } catch (error) {
+      console.error('USPS address validation error:', error);
+      
+      // Check if this is an authentication/service unavailable error
+      const isServiceUnavailable = error instanceof Error && 
+        (error.message.includes('Failed to obtain USPS access token') ||
+         error.message.includes('USPS OAuth failed'));
+      
+      return {
+        isValid: false,
+        serviceUnavailable: isServiceUnavailable,
+        errors: isServiceUnavailable 
+          ? ['USPS address validation service is temporarily unavailable. You may save the customer with a warning.']
+          : ['Address validation failed. Please check the address and try again.'],
+        provider: AddressProvider.USPS,
+        latencyMs: Date.now() - startTime,
+      };
+    }
+  }
+
   private async getAccessToken(): Promise<string> {
     // Check if we have a valid token
     if (this.accessToken && this.tokenExpiry && new Date() < this.tokenExpiry) {
-      console.log('Using cached USPS access token');
       return this.accessToken;
     }
 
@@ -125,130 +282,21 @@ export class USPSService {
       if (!response.ok) {
         const errorText = await response.text();
         console.error('USPS OAuth error response:', errorText);
-        throw new Error(`USPS OAuth failed: ${response.status} ${errorText}`);
+        throw new Error(`USPS OAuth failed: ${response.status} - ${errorText}`);
       }
-
-      const data: USPSAuthResponse = await response.json();
-      console.log('USPS OAuth success, token received');
       
-      this.accessToken = data.access_token;
+      const authData: USPSAuthResponse = await response.json();
+      console.log('USPS OAuth success, token expires in:', authData.expires_in);
       
-      // Set expiry to 5 minutes before actual expiry for safety
-      const expirySeconds = parseInt(data.expires_in) - 300;
-      this.tokenExpiry = new Date(Date.now() + expirySeconds * 1000);
+      this.accessToken = authData.access_token;
+      // Set expiry to 90% of the actual expiry time for safety buffer
+      const expiresInMs = parseInt(authData.expires_in) * 1000 * 0.9;
+      this.tokenExpiry = new Date(Date.now() + expiresInMs);
       
       return this.accessToken;
     } catch (error) {
-      console.error('USPS OAuth error:', error);
+      console.error('Failed to obtain USPS access token:', error);
       throw new Error('Failed to obtain USPS access token');
-    }
-  }
-
-  async validateAddress(address: USPSAddressRequest): Promise<{
-    isValid: boolean;
-    standardizedAddress?: USPSAddressResponse['address'];
-    suggestions?: string[];
-    errors?: string[];
-    serviceUnavailable?: boolean;
-  }> {
-    // Check if service is enabled
-    if (!this.isEnabled) {
-      return {
-        isValid: false,
-        serviceUnavailable: true,
-        errors: ['USPS address validation is not configured. You may save the customer with a warning.'],
-      };
-    }
-
-    try {
-      const token = await this.getAccessToken();
-      
-      // Build query parameters
-      const params = new URLSearchParams({
-        streetAddress: address.streetAddress,
-        state: address.state,
-      });
-      
-      if (address.city) {
-        params.append('city', address.city);
-      }
-      if (address.ZIPCode) {
-        params.append('ZIPCode', address.ZIPCode);
-      }
-      if (address.secondaryAddress) {
-        params.append('secondaryAddress', address.secondaryAddress);
-      }
-
-      const response = await fetch(`${this.baseUrl}/addresses/v3/address?${params}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const errorData: USPSErrorResponse = await response.json().catch(() => ({}));
-        
-        // Handle specific USPS error responses
-        if (response.status === 404) {
-          return {
-            isValid: false,
-            errors: ['Address not found. Please verify the address and try again.'],
-          };
-        }
-        
-        if (response.status === 400) {
-          const errorMessages = this.extractErrorMessages(errorData);
-          return {
-            isValid: false,
-            errors: errorMessages.length > 0 ? errorMessages : ['Invalid address format. Please check your input.'],
-          };
-        }
-
-        throw new Error(`USPS API error: ${response.status}`);
-      }
-
-      const data: USPSAddressResponse = await response.json();
-      
-      // Extract suggestions from corrections and matches
-      const suggestions: string[] = [];
-      if (data.corrections) {
-        suggestions.push(...data.corrections.map(c => c.text));
-      }
-      if (data.matches) {
-        suggestions.push(...data.matches.map(m => m.text));
-      }
-      if (data.warnings) {
-        suggestions.push(...data.warnings);
-      }
-
-      // Check if the address is deliverable
-      const isDeliverable = data.additionalInfo?.DPVConfirmation === 'Y';
-      const isVacant = data.additionalInfo?.vacant === 'Y';
-      
-      return {
-        isValid: isDeliverable && !isVacant,
-        standardizedAddress: data.address,
-        suggestions: suggestions.length > 0 ? suggestions : undefined,
-        errors: isVacant ? ['This address appears to be vacant.'] : undefined,
-      };
-
-    } catch (error) {
-      console.error('USPS address validation error:', error);
-      
-      // Check if this is an authentication/service unavailable error
-      const isServiceUnavailable = error instanceof Error && 
-        (error.message.includes('Failed to obtain USPS access token') ||
-         error.message.includes('USPS OAuth failed'));
-      
-      return {
-        isValid: false,
-        serviceUnavailable: isServiceUnavailable,
-        errors: isServiceUnavailable 
-          ? ['USPS address validation service is temporarily unavailable. You may save the customer with a warning.']
-          : ['Address validation failed. Please check the address and try again.'],
-      };
     }
   }
 
@@ -260,15 +308,20 @@ export class USPSService {
     }
     
     if (errorData.error?.errors) {
-      messages.push(...errorData.error.errors.map(e => e.message || e.detail || 'Unknown error'));
+      errorData.error.errors.forEach(err => {
+        messages.push(err.message);
+      });
     }
     
     if (errorData.errors) {
-      messages.push(...errorData.errors.map(e => e.message || e.detail || 'Unknown error'));
+      errorData.errors.forEach(err => {
+        messages.push(err.message);
+      });
     }
     
-    return messages;
+    return messages.length > 0 ? messages : ['Unknown error occurred'];
   }
 }
 
+// Export singleton instance for backward compatibility
 export const uspsService = USPSService.getInstance();

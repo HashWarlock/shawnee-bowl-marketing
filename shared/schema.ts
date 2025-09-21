@@ -86,3 +86,56 @@ export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type Customer = typeof customers.$inferSelect;
 export type ExportJob = typeof exportJobs.$inferSelect;
 export type InsertExportJob = typeof exportJobs.$inferInsert;
+
+// Address validation types for multi-provider system
+export enum AddressProvider {
+  SMARTY = 'smarty',
+  GOOGLE = 'google',
+  USPS = 'usps'
+}
+
+export interface AddressValidationInput {
+  streetAddress: string;
+  city?: string;
+  state: string;
+  ZIPCode?: string;
+  secondaryAddress?: string; // Apartment, suite, etc.
+}
+
+export interface StandardizedAddress {
+  streetAddress: string;
+  city: string;
+  state: string;
+  ZIPCode: string;
+  ZIPPlus4?: string;
+  secondaryAddress?: string;
+}
+
+export interface NormalizedResult {
+  isValid: boolean;
+  standardizedAddress?: StandardizedAddress;
+  suggestions?: string[];
+  errors?: string[];
+  serviceUnavailable?: boolean;
+  provider: AddressProvider;
+  latencyMs: number;
+  didFallback?: boolean;
+  confidence?: number; // 0-100 confidence score
+}
+
+export interface IAddressValidator {
+  validate(input: AddressValidationInput): Promise<NormalizedResult>;
+  isEnabled(): boolean;
+  getProviderName(): AddressProvider;
+}
+
+// Validation schemas for API requests
+export const addressValidationInputSchema = z.object({
+  streetAddress: z.string().min(1, "Street address is required"),
+  city: z.string().optional(),
+  state: z.string().length(2, "State must be 2 characters"),
+  ZIPCode: z.string().regex(/^\d{5}(-\d{4})?$/, "ZIP code must be in format 12345 or 12345-6789").optional(),
+  secondaryAddress: z.string().optional(),
+});
+
+export type AddressValidationInputType = z.infer<typeof addressValidationInputSchema>;
