@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: customer_management_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: customer_management
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    # ports:
+      # - "5432:5432"  # Removed for security - database not accessible from host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Main Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: customer_management_app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    shm_size: 1gb  # Required for Puppeteer/Chrome in containers
+    environment:
+      # Database connection
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@db:5432/customer_management
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: ${DB_PASSWORD}
+      PGDATABASE: customer_management
+      
+      # Application settings
+      NODE_ENV: production
+      SESSION_SECRET: ${SESSION_SECRET}
+      
+      # USPS API credentials (required for address validation)
+      USPS_CLIENT_ID: ${USPS_CLIENT_ID}
+      USPS_CLIENT_SECRET: ${USPS_CLIENT_SECRET}
+      
+      # Replit Auth settings (configure for your domain)
+      ISSUER_URL: ${ISSUER_URL:-https://replit.com}
+      CLIENT_ID: ${CLIENT_ID}
+      CLIENT_SECRET: ${CLIENT_SECRET}
+      
+    volumes:
+      # Persist downloaded files (using named volume for better permissions)
+      - downloads_data:/app/downloads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
+    driver: local
+  downloads_data:
+    driver: local
+
+networks:
+  default:
+    name: customer_management_network

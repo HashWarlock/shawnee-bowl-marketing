@@ -16,6 +16,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Serve download files
   app.use('/downloads', express.static(path.join(process.cwd(), 'downloads')));
 
+  // Health check endpoint for Docker
+  app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+  });
+
   // Auth routes
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
