@@ -6,6 +6,7 @@ import { insertCustomerSchema } from "@shared/schema";
 import { z } from "zod";
 import { PDFGenerator } from "./services/pdfGenerator";
 import { CSVExporter } from "./services/csvExporter";
+import { uspsService } from "./services/uspsService";
 import path from 'path';
 import express from 'express';
 
@@ -30,6 +31,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  // Address validation route
+  app.post('/api/validate-address', isAuthenticated, async (req, res) => {
+    try {
+      const addressSchema = z.object({
+        streetAddress: z.string().min(1, "Street address is required"),
+        city: z.string().optional(),
+        state: z.string().length(2, "State must be a 2-character code"),
+        ZIPCode: z.string().optional(),
+        secondaryAddress: z.string().optional(),
+      });
+
+      const validatedData = addressSchema.parse(req.body);
+      const result = await uspsService.validateAddress(validatedData);
+      
+      res.json(result);
+    } catch (error) {
+      console.error("Error validating address:", error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ 
+          isValid: false,
+          errors: error.errors.map(e => `${e.path.join('.')}: ${e.message}`)
+        });
+      } else {
+        res.status(500).json({ 
+          isValid: false,
+          errors: ["Address validation failed. Please try again."]
+        });
+      }
     }
   });
 

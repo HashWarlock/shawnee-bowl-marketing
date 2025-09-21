@@ -11,8 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { Plus, RotateCcw } from "lucide-react";
+import { Plus, RotateCcw, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { isUnauthorizedError } from "@/lib/authUtils";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const US_STATES = [
   { value: "AL", label: "Alabama" },
@@ -23,6 +24,7 @@ const US_STATES = [
   { value: "CO", label: "Colorado" },
   { value: "CT", label: "Connecticut" },
   { value: "DE", label: "Delaware" },
+  { value: "DC", label: "District of Columbia" },
   { value: "FL", label: "Florida" },
   { value: "GA", label: "Georgia" },
   { value: "HI", label: "Hawaii" },
@@ -67,9 +69,24 @@ const US_STATES = [
   { value: "WY", label: "Wyoming" },
 ];
 
+interface AddressValidationResult {
+  isValid: boolean;
+  standardizedAddress?: {
+    streetAddress: string;
+    city: string;
+    state: string;
+    ZIPCode: string;
+    ZIPPlus4?: string;
+  };
+  suggestions?: string[];
+  errors?: string[];
+  serviceUnavailable?: boolean;
+}
+
 export default function CustomerEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [addressValidation, setAddressValidation] = useState<AddressValidationResult | null>(null);
 
   const form = useForm<InsertCustomer>({
     resolver: zodResolver(insertCustomerSchema),
@@ -90,6 +107,60 @@ export default function CustomerEntry() {
     },
   });
 
+  const validateAddressMutation = useMutation<AddressValidationResult, Error, {
+    streetAddress: string;
+    city: string;
+    state: string;
+    ZIPCode?: string;
+    secondaryAddress?: string;
+  }>({
+    mutationFn: async (address) => {
+      const response = await apiRequest("POST", "/api/validate-address", address);
+      return await response.json();
+    },
+    onSuccess: (result: AddressValidationResult) => {
+      setAddressValidation(result);
+      if (result.isValid && result.standardizedAddress) {
+        // Auto-fill with standardized address
+        form.setValue("addressLine1", result.standardizedAddress.streetAddress);
+        form.setValue("city", result.standardizedAddress.city);
+        form.setValue("state", result.standardizedAddress.state);
+        form.setValue("zip", result.standardizedAddress.ZIPPlus4 
+          ? `${result.standardizedAddress.ZIPCode}-${result.standardizedAddress.ZIPPlus4}`
+          : result.standardizedAddress.ZIPCode
+        );
+        toast({
+          title: "Address Validated",
+          description: "Address is valid and has been standardized.",
+        });
+      } else if (result.errors && result.errors.length > 0) {
+        toast({
+          title: "Address Invalid",
+          description: result.errors[0],
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Validation Error",
+        description: "Failed to validate address. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const createCustomerMutation = useMutation({
     mutationFn: async (data: InsertCustomer) => {
       return await apiRequest("POST", "/api/customers", data);
@@ -100,6 +171,7 @@ export default function CustomerEntry() {
         description: "Customer added successfully!",
       });
       form.reset();
+      setAddressValidation(null);
       queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
     },
     onError: (error) => {
@@ -123,11 +195,62 @@ export default function CustomerEntry() {
   });
 
   const onSubmit = (data: InsertCustomer) => {
+    // Check if address validation is required and has been performed
+    if (!addressValidation) {
+      toast({
+        title: "Address Validation Required",
+        description: "Please validate the customer's address before saving to ensure data quality.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if address validation failed due to invalid address (not service unavailable)
+    if (!addressValidation.isValid && !addressValidation.serviceUnavailable) {
+      toast({
+        title: "Invalid Address",
+        description: "Cannot save customer with invalid address. Please correct the address and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // If service is unavailable, allow saving with warning
+    if (addressValidation.serviceUnavailable) {
+      toast({
+        title: "Address Not Validated",
+        description: "Customer saved without address validation due to service unavailability.",
+        variant: "default",
+      });
+    }
+
+    // Proceed with customer creation
     createCustomerMutation.mutate(data);
   };
 
   const clearForm = () => {
     form.reset();
+    setAddressValidation(null);
+  };
+
+  const validateAddress = () => {
+    const formValues = form.getValues();
+    if (!formValues.addressLine1 || !formValues.city || !formValues.state) {
+      toast({
+        title: "Missing Information",
+        description: "Please fill in Address Line 1, City, and State before validating.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    validateAddressMutation.mutate({
+      streetAddress: formValues.addressLine1,
+      city: formValues.city,
+      state: formValues.state,
+      ZIPCode: formValues.zip || undefined,
+      secondaryAddress: formValues.addressLine2 || undefined,
+    });
   };
 
   return (
@@ -212,7 +335,7 @@ export default function CustomerEntry() {
                   <FormItem>
                     <FormLabel>Address Line 2</FormLabel>
                     <FormControl>
-                      <Input placeholder="Apt 4B, Suite 200" {...field} data-testid="input-addressLine2" />
+                      <Input placeholder="Apt 4B, Suite 200" {...field} value={field.value || ""} data-testid="input-addressLine2" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -278,6 +401,78 @@ export default function CustomerEntry() {
                 />
               </div>
 
+              {/* Address Validation Section */}
+              <div className="bg-muted/30 rounded-lg p-4 border border-border">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-foreground">US Address Validation</h3>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={validateAddress}
+                    disabled={validateAddressMutation.isPending}
+                    data-testid="button-validate-address"
+                  >
+                    {validateAddressMutation.isPending ? (
+                      <>
+                        <AlertCircle className="h-4 w-4 mr-2 animate-spin" />
+                        Validating...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Validate Address
+                      </>
+                    )}
+                  </Button>
+                </div>
+                
+                {addressValidation && (
+                  <div className="space-y-2">
+                    {addressValidation.isValid ? (
+                      <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950">
+                        <CheckCircle className="h-4 w-4 text-green-600" />
+                        <AlertDescription className="text-green-700 dark:text-green-300">
+                          ✓ Address is valid and has been standardized by USPS
+                        </AlertDescription>
+                      </Alert>
+                    ) : addressValidation.serviceUnavailable ? (
+                      <Alert className="border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950">
+                        <AlertCircle className="h-4 w-4 text-orange-600" />
+                        <AlertDescription className="text-orange-700 dark:text-orange-300">
+                          ⚠️ {addressValidation.errors?.[0] || "Address validation service unavailable"}
+                        </AlertDescription>
+                      </Alert>
+                    ) : (
+                      <Alert variant="destructive">
+                        <XCircle className="h-4 w-4" />
+                        <AlertDescription>
+                          {addressValidation.errors?.[0] || "Address validation failed"}
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                    
+                    {addressValidation.suggestions && addressValidation.suggestions.length > 0 && (
+                      <Alert className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950">
+                        <AlertCircle className="h-4 w-4 text-blue-600" />
+                        <AlertDescription className="text-blue-700 dark:text-blue-300">
+                          <div className="font-medium">USPS Suggestions:</div>
+                          <ul className="mt-1 list-disc list-inside space-y-1">
+                            {addressValidation.suggestions.map((suggestion, index) => (
+                              <li key={index} className="text-sm">{suggestion}</li>
+                            ))}
+                          </ul>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+                )}
+
+                <div className="text-xs text-muted-foreground mt-2">
+                  Validates address against USPS standards to ensure accurate delivery for mailing campaigns.
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                   control={form.control}
@@ -317,7 +512,7 @@ export default function CustomerEntry() {
                       <FormItem className="flex flex-row items-start space-x-3 space-y-0">
                         <FormControl>
                           <Checkbox
-                            checked={field.value}
+                            checked={field.value || false}
                             onCheckedChange={field.onChange}
                             data-testid="checkbox-consentMailing"
                           />
@@ -335,7 +530,7 @@ export default function CustomerEntry() {
                       <FormItem className="flex flex-row items-start space-x-3 space-y-0">
                         <FormControl>
                           <Checkbox
-                            checked={field.value}
+                            checked={field.value || false}
                             onCheckedChange={field.onChange}
                             data-testid="checkbox-consentEmail"
                           />
@@ -353,7 +548,7 @@ export default function CustomerEntry() {
                       <FormItem className="flex flex-row items-start space-x-3 space-y-0">
                         <FormControl>
                           <Checkbox
-                            checked={field.value}
+                            checked={field.value || false}
                             onCheckedChange={field.onChange}
                             data-testid="checkbox-consentPhone"
                           />
@@ -379,12 +574,27 @@ export default function CustomerEntry() {
                 </Button>
                 <Button
                   type="submit"
-                  disabled={createCustomerMutation.isPending}
+                  disabled={createCustomerMutation.isPending || (!addressValidation || (!addressValidation.isValid && !addressValidation.serviceUnavailable))}
                   data-testid="button-submit"
                 >
                   <Plus className="h-4 w-4 mr-2" />
                   {createCustomerMutation.isPending ? "Adding..." : "Add Customer"}
                 </Button>
+                {!addressValidation && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Address validation required before saving customer
+                  </p>
+                )}
+                {addressValidation && !addressValidation.isValid && !addressValidation.serviceUnavailable && (
+                  <p className="text-xs text-destructive mt-2">
+                    Please correct address errors before saving
+                  </p>
+                )}
+                {addressValidation && addressValidation.serviceUnavailable && (
+                  <p className="text-xs text-orange-600 mt-2">
+                    ⚠️ Address validation unavailable - customer can be saved with warning
+                  </p>
+                )}
               </div>
             </form>
           </Form>
