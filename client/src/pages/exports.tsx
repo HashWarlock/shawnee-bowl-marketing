@@ -77,6 +77,8 @@ export default function Exports() {
       if (data.downloadUrl) {
         window.open(data.downloadUrl, '_blank');
       }
+      // Refresh the recent exports table
+      queryClient.invalidateQueries({ queryKey: ["/api/exports/recent"] });
     },
     onError: (error) => {
       if (isUnauthorizedError(error)) {
@@ -111,6 +113,8 @@ export default function Exports() {
       if (data.downloadUrl) {
         window.open(data.downloadUrl, '_blank');
       }
+      // Refresh the recent exports table
+      queryClient.invalidateQueries({ queryKey: ["/api/exports/recent"] });
     },
     onError: (error) => {
       if (isUnauthorizedError(error)) {
