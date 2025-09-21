@@ -1,0 +1,354 @@
+Nice — below is a focused, one-shot MVP specification you can hand to an AI coder (or an engineer) to implement a simple webpage that:
+
+* collects U.S. customer contact info,
+* generates print-ready mailing labels (PDF) for postal mail,
+* exports call lists (CSV) for phone calls and automated emails,
+* includes minimal security, consent, and operational requirements.
+
+I've kept the UI simple, the architecture minimal but production-minded, and included deliverables, API sketches, data model, sample files, acceptance tests, and a developer task list so the whole thing can be implemented in one pass.
+
+---
+
+# MVP Summary (one-paragraph)
+
+A single-page web app + small backend that collects customer contact info (name, address, phone, email, consent flags), stores records in a database, provides UI controls to select records and generate (a) a print-ready PDF of postal labels (Avery 5160 / custom layout) and (b) downloadable CSV call lists for phone or email campaigns. Minimal admin UI to search/filter and queue batch jobs. Simple auth, HTTPS-only deployment, and export auditing.
+
+---
+
+# Key constraints & assumptions
+
+* Addresses are U.S. only.
+* USPS/third-party address validation is **optional** for MVP (addable later); we supply hooks to plug it in.
+* Label format: Avery 5160 (3 columns × 10 rows per 8.5×11 sheet) by default; developer can configure other templates.
+* Call lists are CSVs compatible with phone dialers (columns: FirstName, LastName, Phone, Email, AddressLine1, City, State, ZIP, OptIn).
+* Target build time: single engineering sprint — single codebase repo, Dockerized, simple infra.
+
+---
+
+# High-level architecture
+
+Mermaid flow (copy into a tool that renders Mermaid if you want a diagram):
+
+```mermaid
+flowchart LR
+  A[User browser] --> B(Web UI - Next/React)
+  B --> C(API Server - Node/Express or Next API)
+  C --> D[DB - PostgreSQL or SQLite (Prisma)]
+  C --> E[Job queue - BullMQ/Redis] 
+  E --> F[Worker] 
+  F --> G[PDF Generator (Puppeteer/wkhtmltopdf/PDFKit)]
+  F --> H[CSV Builder]
+  G --> I[PDF output (S3 or local /downloads)]
+  H --> J[CSV output (S3 or local /downloads)]
+  C --> K[Optional: Address Validation API]
+```
+
+---
+
+# Recommended minimal tech stack (one-shot friendly)
+
+* Frontend: Next.js (React) — single page for entry + admin screens.
+* Backend: Next API routes or Express (Node 18+) for APIs.
+* Database: SQLite (Prisma) for fastest dev; PostgreSQL for production parity. Use Prisma ORM to speed dev.
+* Job queue: optional for small volume — direct sync is fine. For larger batches use Redis + BullMQ and a worker that generates PDF/CSV.
+* PDF generation: Puppeteer (render print CSS) or pdf-lib/PDFKit (simpler). Puppeteer gives pixel-perfect labels via HTML/CSS.
+* Storage: local `/downloads` for MVP or S3-compatible storage.
+* Auth: single admin API key or simple email+password with hashed password (bcrypt). Use HTTPS.
+* Container: Docker + docker-compose (for worker + Redis if used).
+* Tests: basic unit + integration; Postman/Insomnia collection for API testing.
+* CI: GitHub Actions (optional).
+
+---
+
+# Data model (Prisma schema-style)
+
+```prisma
+model Customer {
+  id             String   @id @default(cuid())
+  firstName      String
+  lastName       String
+  company        String? 
+  addressLine1   String
+  addressLine2   String?
+  city           String
+  state          String
+  zip            String
+  phone          String?
+  email          String?
+  consentMailing Boolean  @default(true) // opted-in for physical mail
+  consentEmail   Boolean  @default(true)
+  consentPhone   Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+```
+
+---
+
+# API surface (OpenAPI-like concise spec)
+
+**Auth**
+
+* `POST /api/login` — returns admin token (simple). Body `{username,password}`.
+
+**Customer CRUD**
+
+* `POST /api/customers` — create. Body: customer fields. Returns created customer.
+* `GET /api/customers?search=&page=&perPage=&consentMailing=` — list & filter
+* `GET /api/customers/:id`
+* `PUT /api/customers/:id`
+* `DELETE /api/customers/:id`
+
+**Exports / Jobs**
+
+* `POST /api/exports/labels` — create label job. Body:
+
+  ```json
+  {
+    "customerIds": ["id1","id2",...],
+    "labelTemplate": "avery_5160",
+    "format": "pdf",
+    "includeCompany": true,
+    "paperSize":"letter",
+    "copies":1
+  }
+  ```
+
+  Response: `{ jobId, statusUrl }` or immediate PDF URL if small.
+* `GET /api/exports/jobs/:jobId` — job status & result link.
+* `POST /api/exports/calllist` — create call list CSV. Body:
+
+  ```json
+  { "customerIds": [...], "fields":["firstName","lastName","phone","email","addressLine1","city","state","zip"] }
+  ```
+
+  Returns CSV download link.
+
+**Address validation hook (optional)**
+
+* `POST /api/validate/address` — validate/normalize address; returns normalized address + confidence.
+
+---
+
+# Frontend pages / components (minimal)
+
+1. **Home / Data Entry Form**
+
+   * Fields: First, Last, Company (optional), Address1, Address2, City, State (dropdown), ZIP, Phone, Email, consent checkboxes (mail/email/phone).
+   * Validation: required fields, ZIP 5-digit, state two-letter code.
+   * Submit → POST /api/customers
+
+2. **Admin / List View**
+
+   * Table of customers with search, filter by consent flags, quick edit inline.
+   * Checkbox selector per row and "Select All".
+   * Actions: "Generate Labels", "Export Call List (CSV)", "Delete".
+
+3. **Export Modal**
+
+   * For labels: choose template (Avery 5160 default), preview sample page, generate.
+   * For call list: choose fields and download.
+
+4. **Job Status page** (optional)
+
+   * Show progress and link to download file.
+
+---
+
+# Label template: print HTML/CSS (Avery 5160 example)
+
+Provide printable HTML that CSS prints to 3 columns × 10 rows. Example skeleton (developer can paste into Puppeteer):
+
+```html
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Labels</title>
+<style>
+@page { size: letter; margin: 0.5in; }
+body { margin:0; padding:0; font-family: Arial, sans-serif; font-size:12pt; }
+.labels { width: 8.5in; display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 1.0in; gap: 0.125in 0.125in; }
+.label {
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+.name { font-weight:700; }
+.addr { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div class="labels">
+  <!-- Repeat one .label per address in server-rendered HTML -->
+  <div class="label">
+    <div class="name">John Doe</div>
+    <div class="addr">Company Inc.\n123 Main St\nApt 2\nSpringfield, IL 62701</div>
+  </div>
+  <!-- etc -->
+</div>
+</body>
+</html>
+```
+
+Notes: Use Puppeteer to render this HTML and print to PDF with `printBackground: true` and `format: 'Letter'`.
+
+---
+
+# Call list CSV format (sample)
+
+Header row suggestions for dialer compatibility:
+
+```
+FirstName,LastName,Phone,Email,AddressLine1,AddressLine2,City,State,ZIP,ConsentMailing,ConsentEmail,ConsentPhone
+```
+
+Example CSV row:
+
+```
+John,Doe,3125551234,john@example.com,123 Main St,,Chicago,IL,60605,TRUE,TRUE,TRUE
+```
+
+---
+
+# Acceptance criteria / QA checklist
+
+* [ ] Data entry form accepts and persist valid records; validation errors for invalid ZIP, missing required fields.
+* [ ] Admin list shows created customers; search and pagination work.
+* [ ] Selecting customers and clicking "Generate Labels" produces a downloadable PDF where each address is placed in a label cell matching Avery 5160 and prints correctly on 8.5×11 paper.
+* [ ] Selecting customers and clicking "Export Call List" downloads a CSV with requested fields and correct UTF-8 encoding.
+* [ ] Job API returns status and provides downloadable links that expire or are stored with limited retention.
+* [ ] PDF and CSV generation is robust for 1–10,000 records (if large batches use background worker).
+* [ ] HTTPS only; basic admin authentication required to access exports and listing endpoints.
+* [ ] Logs are written for exports (who triggered export, timestamp, number exported).
+* [ ] Optional: address normalization hook unblocks inaccurate addresses (if implemented).
+
+---
+
+# Security & privacy (minimum)
+
+* Use HTTPS/TLS.
+* Store PII encrypted at rest if possible (or limit retention). For MVP, ensure DB access control and server environment variables stored securely.
+* Admin pages protected by auth (JWT or session).
+* Provide privacy notice on entry form explaining how contact info will be used; include checkboxes for consent.
+* Data retention policy: default purge older than 2 years (configurable).
+* Opt-out flow: allow quick delete of customer record or flag to suppress future exports.
+
+---
+
+# Operational notes & scaling
+
+* Small volume: synchronous generation (render PDF on request).
+* High volume: use job queue + worker; stream results to S3; notify via email when ready.
+* Rate limit API endpoints to prevent abuse.
+* Implement export audit log to track who exported what and when.
+
+---
+
+# Implementation tasks for an AI coder (ordered, actionable)
+
+1. **Repo bootstrap**
+
+   * Create Next.js app with TypeScript.
+   * Add Prisma and initial schema above (SQLite for dev).
+   * Add API routes for auth and customer CRUD.
+2. **Frontend**
+
+   * Build single-page data entry form with validation (React Hook Form).
+   * Build admin list table with search / select checkboxes.
+   * Build export modal with template options.
+3. **Export logic**
+
+   * Implement `/api/exports/labels` route that accepts customer IDs and returns HTML label page or triggers worker to generate PDF via Puppeteer.
+   * Implement `/api/exports/calllist` route that composes CSV and returns download.
+4. **PDF generation**
+
+   * Add Puppeteer script to render the server-side template to PDF (Avery CSS). For synchronous small batches, generate and return; for large batches, queue job.
+5. **Job queue (optional for >500 records)**
+
+   * Add BullMQ + Redis worker to process export jobs and write files to `/downloads` or S3. Add `/api/exports/jobs/:id`.
+6. **Auth & security**
+
+   * Implement simple admin auth (JWT). Protect admin endpoints.
+7. **Tests**
+
+   * Add unit tests for API endpoints; add a Postman collection (or cURL examples).
+8. **Docker**
+
+   * Add Dockerfile + docker-compose with Redis for queue (if used).
+9. **Docs**
+
+   * README with env variables and run instructions and sample curl commands.
+
+---
+
+# Sample cURL / quick manual test commands
+
+Create customer:
+
+```bash
+curl -X POST https://app.example.com/api/customers \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"firstName":"John","lastName":"Doe","addressLine1":"123 Main St","city":"Chicago","state":"IL","zip":"60605","phone":"3125551234","email":"john@example.com","consentMailing":true}'
+```
+
+Generate labels (small batch sync):
+
+```bash
+curl -X POST https://app.example.com/api/exports/labels \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"customerIds":["id1","id2"], "labelTemplate":"avery_5160", "format":"pdf"}'
+# returns JSON { "downloadUrl": "..." }
+```
+
+Export call list:
+
+```bash
+curl -X POST https://app.example.com/api/exports/calllist \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"customerIds":["id1","id2"], "fields":["firstName","lastName","phone","email","addressLine1","city","state","zip"]}'
+```
+
+---
+
+# Deliverables to hand to the AI coder
+
+1. Repo scaffold (Next.js + Prisma).
+2. `prisma/schema.prisma` (use model above).
+3. `pages/index.tsx` (data entry), `pages/admin.tsx` (list & exports).
+4. `pages/api/customers/*` CRUD routes.
+5. `pages/api/exports/*` routes with sample HTML template for labels.
+6. `scripts/generatePdf.js` (Puppeteer implement).
+7. `docker-compose.yml` (optional: Redis + app).
+8. README with environment variables:
+
+   * `DATABASE_URL`
+   * `ADMIN_USERNAME` `ADMIN_PASSWORD` (or JWT secret)
+   * `REDIS_URL` (optional)
+   * `STORAGE_PATH` or `S3_*` envs
+
+---
+
+# Minimal acceptance test cases (for QA)
+
+1. Create 3 customers, each with a unique address. Generate labels; verify PDF contains three labels and page layout matches Avery 5160 when printed.
+2. Export CSV for those 3 customers; open in Excel and verify columns and rows match.
+3. Search by last name and filter by consent flags.
+4. Attempt export without auth — expect 401.
+
+---
+
+# Trade-offs & future improvements
+
+* **Sync vs queue**: sync is simpler for MVP but will block for large batches. Use queue + worker for scalability.
+* **Address validation**: not required for MVP. Adding USPS/SmartyStreets improves deliverability.
+* **Storage**: local downloads quick to iterate; S3 is better for multi-instance production.
+* **Security**: use stronger auth (SSO) and encryption for PII in production.
+
+---
+
+If you want, I can:
+
+* produce the exact `prisma/schema.prisma`, `docker-compose.yml`, full sample Next.js file for label HTML, and a ready-to-run Puppeteer worker script now — packaged as a single developer-ready code drop. (Say “generate code drop” and I’ll output the files in the next message.)
