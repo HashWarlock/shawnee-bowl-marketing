@@ -9,7 +9,7 @@ import Landing from "@/pages/landing";
 import Home from "@/pages/home";
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   return (
     <Switch>
@@ -18,8 +18,12 @@ function Router() {
       ) : (
         <>
           <Route path="/" component={Home} />
-          <Route path="/customers" component={Home} />
-          <Route path="/exports" component={Home} />
+          {user?.role === 'admin' && (
+            <>
+              <Route path="/customers" component={Home} />
+              <Route path="/exports" component={Home} />
+            </>
+          )}
         </>
       )}
       <Route component={NotFound} />

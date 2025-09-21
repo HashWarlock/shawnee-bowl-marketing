@@ -1,30 +1,43 @@
 import { useLocation } from "wouter";
 import { UserPlus, Users, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function TabNavigation() {
   const [location, setLocation] = useLocation();
+  const { user } = useAuth();
 
-  const tabs = [
+  const allTabs = [
     {
       id: "customer-entry",
       label: "Customer Entry",
       icon: UserPlus,
       path: "/",
+      adminOnly: false,
     },
     {
       id: "customer-management", 
       label: "Customer Management",
       icon: Users,
       path: "/customers",
+      adminOnly: true,
     },
     {
       id: "exports",
       label: "Exports", 
       icon: Download,
       path: "/exports",
+      adminOnly: true,
     },
   ];
+
+  // Filter tabs based on user role
+  const tabs = allTabs.filter(tab => {
+    if (tab.adminOnly) {
+      return user?.role === 'admin';
+    }
+    return true;
+  });
 
   return (
     <div className="bg-card border-b border-border">
