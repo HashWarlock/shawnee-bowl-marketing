@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { User } from "@shared/schema";
 
 export function useAuth() {
   const { data: user, isLoading } = useQuery({
@@ -7,7 +8,7 @@ export function useAuth() {
   });
 
   return {
-    user,
+    user: user as User | undefined,
     isLoading,
     isAuthenticated: !!user,
   };

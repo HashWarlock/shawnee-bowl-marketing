@@ -15,8 +15,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
-  // Serve download files
-  app.use('/downloads', express.static(path.join(process.cwd(), 'downloads')));
+  // Secure download endpoint for admin-only access
+  app.get('/api/downloads/:filename', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const filename = req.params.filename;
+      const filePath = path.join(process.cwd(), 'downloads', filename);
+      
+      // Basic security: check if file exists and is within downloads directory
+      if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return res.status(400).json({ message: "Invalid filename" });
+      }
+      
+      // Check if file exists
+      const fs = await import('fs');
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ message: "File not found" });
+      }
+      
+      // Set appropriate headers and stream the file
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      
+      const fileStream = fs.createReadStream(filePath);
+      fileStream.pipe(res);
+      
+    } catch (error) {
+      console.error("Error serving download file:", error);
+      res.status(500).json({ message: "Failed to serve file" });
+    }
+  });
 
   // Health check endpoint for Docker
   app.get('/api/health', (req, res) => {
@@ -207,13 +234,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.updateExportJob(job.id, {
         status: 'completed',
         fileName,
-        filePath: `/downloads/${fileName}`,
+        filePath: `/api/downloads/${fileName}`,
         completedAt: new Date(),
       });
 
       res.json({
         jobId: job.id,
-        downloadUrl: `/downloads/${fileName}`,
+        downloadUrl: `/api/downloads/${fileName}`,
         message: "Labels generated successfully"
       });
 
@@ -266,13 +293,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.updateExportJob(job.id, {
         status: 'completed',
         fileName,
-        filePath: `/downloads/${fileName}`,
+        filePath: `/api/downloads/${fileName}`,
         completedAt: new Date(),
       });
 
       res.json({
         jobId: job.id,
-        downloadUrl: `/downloads/${fileName}`,
+        downloadUrl: `/api/downloads/${fileName}`,
         message: "Call list exported successfully"
       });
 
@@ -286,7 +313,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/exports/jobs/:id', isAuthenticated, async (req, res) => {
+  app.get('/api/exports/jobs/:id', isAuthenticated, isAdmin, async (req, res) => {
     try {
       const job = await storage.getExportJob(req.params.id);
       if (!job) {
