@@ -32,8 +32,8 @@ export default function CustomerManagement() {
         perPage: perPage.toString(),
       });
       if (search) params.append("search", search);
-      if (consentFilter) params.append("consentMailing", consentFilter);
-      if (stateFilter) params.append("state", stateFilter);
+      if (consentFilter && consentFilter !== "all") params.append("consentMailing", consentFilter);
+      if (stateFilter && stateFilter !== "all") params.append("state", stateFilter);
       
       const response = await fetch(`/api/customers?${params}`, {
         credentials: "include",
@@ -177,7 +177,7 @@ export default function CustomerManagement() {
                 <SelectValue placeholder="All Mailing Consent" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Mailing Consent</SelectItem>
+                <SelectItem value="all">All Mailing Consent</SelectItem>
                 <SelectItem value="true">Mailing Consent: Yes</SelectItem>
                 <SelectItem value="false">Mailing Consent: No</SelectItem>
               </SelectContent>
@@ -187,7 +187,7 @@ export default function CustomerManagement() {
                 <SelectValue placeholder="All States" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All States</SelectItem>
+                <SelectItem value="all">All States</SelectItem>
                 <SelectItem value="CA">California</SelectItem>
                 <SelectItem value="IL">Illinois</SelectItem>
                 <SelectItem value="NY">New York</SelectItem>
