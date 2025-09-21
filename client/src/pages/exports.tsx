@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +15,9 @@ import { format } from "date-fns";
 
 export default function Exports() {
   const { toast } = useToast();
+  const [location] = useLocation();
+  
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
   
   const [labelOptions, setLabelOptions] = useState({
     template: "avery_5160",
@@ -26,6 +30,20 @@ export default function Exports() {
     fields: ["firstName", "lastName", "phone", "email"],
     consentFilter: "all",
   });
+
+  // Load selected customer IDs from session storage on mount
+  useEffect(() => {
+    const stored = sessionStorage.getItem('selectedCustomerIds');
+    if (stored) {
+      try {
+        const ids = JSON.parse(stored);
+        setSelectedCustomerIds(Array.isArray(ids) ? ids : []);
+      } catch (e) {
+        console.error('Failed to parse selected customer IDs:', e);
+        setSelectedCustomerIds([]);
+      }
+    }
+  }, []);
 
   const { data: recentExports, isLoading: exportsLoading } = useQuery({
     queryKey: ["/api/exports/recent"],
@@ -115,9 +133,6 @@ export default function Exports() {
   });
 
   const handleGenerateLabels = () => {
-    // Mock selected customer IDs - in real app, these would come from customer management
-    const selectedCustomerIds = ["mock-id-1", "mock-id-2", "mock-id-3"];
-    
     if (selectedCustomerIds.length === 0) {
       toast({
         title: "No Customers Selected",
@@ -137,9 +152,6 @@ export default function Exports() {
   };
 
   const handleExportCallList = () => {
-    // Mock selected customer IDs - in real app, these would come from customer management
-    const selectedCustomerIds = ["mock-id-1", "mock-id-2", "mock-id-3"];
-    
     if (selectedCustomerIds.length === 0) {
       toast({
         title: "No Customers Selected",
@@ -263,14 +275,14 @@ export default function Exports() {
               <div className="flex items-center">
                 <Info className="text-accent mr-2 h-4 w-4" />
                 <span className="text-sm text-foreground" data-testid="text-selected-for-labels">
-                  3 customers selected for label generation
+                  {selectedCustomerIds.length} customers selected for label generation
                 </span>
               </div>
             </div>
 
             <Button
               onClick={handleGenerateLabels}
-              disabled={generateLabelsMutation.isPending}
+              disabled={generateLabelsMutation.isPending || selectedCustomerIds.length === 0}
               className="w-full"
               data-testid="button-generate-labels"
             >
@@ -355,14 +367,14 @@ export default function Exports() {
               <div className="flex items-center">
                 <Info className="text-accent mr-2 h-4 w-4" />
                 <span className="text-sm text-foreground" data-testid="text-selected-for-csv">
-                  3 customers selected for call list export
+                  {selectedCustomerIds.length} customers selected for call list export
                 </span>
               </div>
             </div>
 
             <Button
               onClick={handleExportCallList}
-              disabled={exportCallListMutation.isPending}
+              disabled={exportCallListMutation.isPending || selectedCustomerIds.length === 0}
               className="w-full"
               data-testid="button-export-csv"
             >

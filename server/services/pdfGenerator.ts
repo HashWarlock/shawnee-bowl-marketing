@@ -12,23 +12,44 @@ interface LabelOptions {
 
 export class PDFGenerator {
   static async generateLabels(customers: Customer[], options: LabelOptions): Promise<string> {
+    console.log('Starting PDF generation for', customers.length, 'customers');
+    
     const browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-default-apps',
+        '--disable-extensions'
+      ]
     });
+    
+    console.log('Browser launched successfully');
 
     try {
+      console.log('Creating new page...');
       const page = await browser.newPage();
+      
+      console.log('Generating HTML content...');
       const html = this.generateLabelHTML(customers, options);
       
+      console.log('Setting page content...');
       await page.setContent(html, { waitUntil: 'networkidle0' });
       
       const fileName = `labels_${Date.now()}.pdf`;
       const filePath = path.join(process.cwd(), 'downloads', fileName);
       
+      console.log('Creating downloads directory:', path.dirname(filePath));
       // Ensure downloads directory exists
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       
+      console.log('Generating PDF at:', filePath);
       await page.pdf({
         path: filePath,
         format: options.paperSize === 'letter' ? 'letter' : 'a4',
@@ -41,8 +62,13 @@ export class PDFGenerator {
         }
       });
       
+      console.log('PDF generated successfully:', filePath);
       return filePath;
+    } catch (error) {
+      console.error('Error during PDF generation:', error);
+      throw error;
     } finally {
+      console.log('Closing browser...');
       await browser.close();
     }
   }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Customer } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -16,6 +17,7 @@ import { format } from "date-fns";
 export default function CustomerManagement() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   
   const [search, setSearch] = useState("");
   const [consentFilter, setConsentFilter] = useState("");
@@ -116,6 +118,38 @@ export default function CustomerManagement() {
     }
   };
 
+  const handleGenerateLabels = () => {
+    if (selectedCustomers.size === 0) {
+      toast({
+        title: "No Customers Selected",
+        description: "Please select customers first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Store selected customer IDs in session storage and navigate to exports
+    const customerIds = Array.from(selectedCustomers);
+    sessionStorage.setItem('selectedCustomerIds', JSON.stringify(customerIds));
+    setLocation('/exports?action=labels');
+  };
+
+  const handleExportCallList = () => {
+    if (selectedCustomers.size === 0) {
+      toast({
+        title: "No Customers Selected",
+        description: "Please select customers first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Store selected customer IDs in session storage and navigate to exports
+    const customerIds = Array.from(selectedCustomers);
+    sessionStorage.setItem('selectedCustomerIds', JSON.stringify(customerIds));
+    setLocation('/exports?action=calllist');
+  };
+
   const renderConsentBadges = (customer: Customer) => {
     const badges = [];
     if (customer.consentMailing) badges.push(<Badge key="mail" variant="secondary">Mail</Badge>);
@@ -209,6 +243,7 @@ export default function CustomerManagement() {
               <Button
                 size="sm"
                 className="bg-primary text-primary-foreground hover:bg-primary/90"
+                onClick={handleGenerateLabels}
                 data-testid="button-generate-labels"
               >
                 <Tags className="h-4 w-4 mr-1" />
@@ -217,6 +252,7 @@ export default function CustomerManagement() {
               <Button
                 size="sm"
                 variant="outline"
+                onClick={handleExportCallList}
                 data-testid="button-export-call-list"
               >
                 <Phone className="h-4 w-4 mr-1" />
